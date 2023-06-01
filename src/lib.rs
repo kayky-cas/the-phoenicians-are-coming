@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{HashMap, VecDeque},
     str::FromStr,
 };
 
@@ -33,15 +33,16 @@ enum WorldMapNode {
     Port(usize),
 }
 
-struct PhoenicianTrader {
+pub struct PhoenicianTrader {
     current_port: Pos,
     world_map: HashMap<Pos, WorldMapNode>,
     fuel_cost: usize,
     map_size: (usize, usize),
 }
 
-impl PhoenicianTrader {
-    fn go_to_next_port(&mut self) {
+impl Iterator for PhoenicianTrader {
+    type Item = usize;
+    fn next(&mut self) -> Option<Self::Item> {
         let mut visited: HashMap<Pos, usize> = HashMap::new();
         let mut queue = VecDeque::new();
 
@@ -61,7 +62,7 @@ impl PhoenicianTrader {
 
             visited.insert(node, distance);
 
-            if let WorldMapNode::Port(port) = self.world_map.get(&dbg!(node)).unwrap() {
+            if let WorldMapNode::Port(port) = self.world_map.get(&node).unwrap() {
                 if *port > current_port_id {
                     ports.push((node, distance));
                 }
@@ -91,64 +92,84 @@ impl PhoenicianTrader {
             }
         }
 
-        let (port, distance) = ports
-            .iter()
-            .min_by_key(|(port, _)| match self.world_map.get(&port) {
-                Some(WorldMapNode::Port(current_port)) => current_port,
-                _ => unreachable!("Should be a port"),
-            })
-            .unwrap()
-            .clone();
+        let (port, distance) =
+            match ports
+                .iter()
+                .min_by_key(|(port, _)| match self.world_map.get(&port) {
+                    Some(WorldMapNode::Port(current_port)) => current_port,
+                    _ => unreachable!("Should be a port"),
+                }) {
+                Some((port, distance)) => (*port, *distance),
+                None => return None,
+            };
 
         self.fuel_cost += distance;
         self.current_port = port;
+
+        Some(self.fuel_cost)
     }
 }
 
 impl FromStr for PhoenicianTrader {
     type Err = anyhow::Error;
     fn from_str(s: &str) -> Result<Self> {
-        let world_map: HashMap<Pos, WorldMapNode> = s
-            .lines()
-            .enumerate()
-            .flat_map(|(y, line)| {
-                line.trim()
-                    .chars()
-                    .enumerate()
-                    .map(move |(x, c)| (Pos(x as i32, y as i32), c))
-            })
-            .map(|(pos, c)| match c {
-                '.' => (pos, WorldMapNode::Water),
-                '*' => (pos, WorldMapNode::Land),
-                '0'..='9' => (pos, WorldMapNode::Port(c.to_digit(10).unwrap() as usize)),
-                _ => unreachable!("Invalid character"),
-            })
-            .collect();
+        let mut map_size = (0, 0);
+        let mut world_map: HashMap<Pos, WorldMapNode> = HashMap::new();
 
-        let current_port = dbg!(world_map
+        for (y, line) in s.lines().skip(1).enumerate() {
+            for (x, ch) in line.trim().chars().enumerate() {
+                let pos = Pos(x as i32, y as i32);
+
+                if x > map_size.0 {
+                    map_size.0 = x;
+                }
+                if y > map_size.1 {
+                    map_size.1 = y;
+                }
+
+                match ch {
+                    '.' => {
+                        world_map.insert(pos, WorldMapNode::Water);
+                    }
+                    '*' => {
+                        world_map.insert(pos, WorldMapNode::Land);
+                    }
+                    '0'..='9' => {
+                        world_map
+                            .insert(pos, WorldMapNode::Port(ch.to_digit(10).unwrap() as usize));
+                    }
+                    _ => unreachable!("Invalid character"),
+                }
+            }
+        }
+
+        let current_port = world_map
             .iter()
             .find_map(|(pos, node)| match node {
                 WorldMapNode::Port(1) => Some(*pos),
                 _ => None,
             })
-            .unwrap());
+            .unwrap();
 
         Ok(Self {
             current_port,
             world_map,
             fuel_cost: 0,
-            map_size: (s.lines().next().unwrap().len(), s.lines().count()),
+            map_size: (map_size.0 + 1, map_size.1 + 1),
         })
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::*;
 
     #[test]
     fn test_go_to_next_port() {
-        const INPUT: &str = r"............****..............**......................................**....*1..
+        const INPUT: &str = r"80 15
+            ............****..............**......................................**....*1..
             ..........*******.............****............*...........********....****......
             ..........*******.............****..........****..........********....****......
             ..........*******.............****.........******..........********....****.....
@@ -166,9 +187,22 @@ mod tests {
 
         let mut phoenicians: PhoenicianTrader = INPUT.parse().unwrap();
 
-        phoenicians.go_to_next_port();
+        phoenicians.next();
 
         assert_eq!(phoenicians.current_port, Pos(1, 14));
         assert_eq!(phoenicians.fuel_cost, 126);
+    }
+
+    #[test]
+    fn test_input() {
+        let input = fs::read_to_string("./cases/caso20.txt").unwrap();
+
+        let mut phoenicians: PhoenicianTrader = input.parse().unwrap();
+
+        while let Some(fuel_cost) = phoenicians.next() {
+            println!("{}", fuel_cost);
+        }
+
+        dbg!(phoenicians.fuel_cost);
     }
 }
