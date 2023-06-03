@@ -35,6 +35,7 @@ enum WorldMapNode {
 
 pub struct PhoenicianTrader {
     current_port: Pos,
+    first_port: Pos,
     world_map: HashMap<Pos, WorldMapNode>,
     fuel_cost: usize,
     map_size: (usize, usize),
@@ -54,14 +55,9 @@ impl Iterator for PhoenicianTrader {
         };
 
         queue.push_back((self.current_port, 0));
+        visited.insert(self.current_port, 0);
 
         while let Some((node, distance)) = queue.pop_front() {
-            if visited.get(&node).is_some() {
-                continue;
-            }
-
-            visited.insert(node, distance);
-
             if let WorldMapNode::Port(port) = self.world_map.get(&node).unwrap() {
                 if *port > current_port_id {
                     ports.push((node, distance));
@@ -88,8 +84,24 @@ impl Iterator for PhoenicianTrader {
 
                 if visited.get(&next_node).is_none() {
                     queue.push_back((next_node, distance + 1));
+                    visited.insert(next_node, distance + 1);
                 }
             }
+        }
+
+        if self.first_port == self.current_port {
+            let distance =
+                match ports
+                    .iter()
+                    .max_by_key(|(port, _)| match self.world_map.get(&port) {
+                        Some(WorldMapNode::Port(current_port)) => current_port,
+                        _ => unreachable!("Should be a port"),
+                    }) {
+                    Some((_, distance)) => *distance,
+                    None => return None,
+                };
+
+            self.fuel_cost += distance;
         }
 
         let (port, distance) =
@@ -152,6 +164,7 @@ impl FromStr for PhoenicianTrader {
             .unwrap();
 
         Ok(Self {
+            first_port: current_port,
             current_port,
             world_map,
             fuel_cost: 0,
