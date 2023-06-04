@@ -2,7 +2,6 @@ use the_phoenicians_are_coming::PhoenicianTrader;
 
 #[tokio::main]
 async fn main() {
-    // read all files from a directory
     let files = std::fs::read_dir("cases").unwrap();
 
     let mut threads = Vec::new();

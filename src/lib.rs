@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{BinaryHeap, HashMap, VecDeque},
     str::FromStr,
 };
 
@@ -33,6 +33,21 @@ enum WorldMapNode {
     Port(usize),
 }
 
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct PosWithDistance(Pos, usize);
+
+impl PartialOrd for PosWithDistance {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for PosWithDistance {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.1.cmp(&other.1).reverse()
+    }
+}
+
 pub struct PhoenicianTrader {
     current_port: Pos,
     first_port: Pos,
@@ -45,7 +60,8 @@ impl Iterator for PhoenicianTrader {
     type Item = usize;
     fn next(&mut self) -> Option<Self::Item> {
         let mut visited: HashMap<Pos, usize> = HashMap::new();
-        let mut queue = VecDeque::new();
+        let mut queue: BinaryHeap<PosWithDistance> =
+            BinaryHeap::with_capacity(self.map_size.0 * self.map_size.1);
 
         let mut ports = Vec::new();
 
@@ -54,10 +70,10 @@ impl Iterator for PhoenicianTrader {
             _ => unreachable!("Should be a port"),
         };
 
-        queue.push_back((self.current_port, 0));
+        queue.push(PosWithDistance(self.current_port, 0));
         visited.insert(self.current_port, 0);
 
-        while let Some((node, distance)) = queue.pop_front() {
+        while let Some(PosWithDistance(node, distance)) = queue.pop() {
             if let WorldMapNode::Port(port) = self.world_map.get(&node).unwrap() {
                 if *port > current_port_id {
                     ports.push((node, distance));
@@ -83,7 +99,7 @@ impl Iterator for PhoenicianTrader {
                 }
 
                 if visited.get(&next_node).is_none() {
-                    queue.push_back((next_node, distance + 1));
+                    queue.push(PosWithDistance(next_node, distance + 1));
                     visited.insert(next_node, distance + 1);
                 }
             }
@@ -155,13 +171,13 @@ impl FromStr for PhoenicianTrader {
             }
         }
 
-        let current_port = world_map
+        let current_port = match world_map
             .iter()
-            .find_map(|(pos, node)| match node {
-                WorldMapNode::Port(1) => Some(*pos),
-                _ => None,
-            })
-            .unwrap();
+            .find(|(_, node)| matches!(node, WorldMapNode::Port(1)))
+        {
+            Some((pos, _)) => *pos,
+            None => return Err(anyhow::anyhow!("No starting port")),
+        };
 
         Ok(Self {
             first_port: current_port,
