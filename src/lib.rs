@@ -1,14 +1,17 @@
-use std::{
-    collections::{BinaryHeap, HashMap},
-    str::FromStr,
-};
+use std::{collections::VecDeque, str::FromStr};
 
 use anyhow::Result;
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Pos(i32, i32);
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+impl Pos {
+    fn to_index(&self, map_size: (usize, usize)) -> usize {
+        self.1 as usize * map_size.0 + self.0 as usize
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Direction {
     North,
     South,
@@ -27,13 +30,14 @@ impl Direction {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum WorldMapNode {
     Water,
     Land,
     Port(usize),
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct PosWithDistance(Pos, usize);
 
 impl PartialOrd for PosWithDistance {
@@ -51,33 +55,45 @@ impl Ord for PosWithDistance {
 pub struct PhoenicianTrader {
     current_port: Pos,
     first_port: Pos,
-    world_map: HashMap<Pos, WorldMapNode>,
-    fuel_cost: usize,
+    left_ports: Vec<Pos>,
+    world_map: Vec<WorldMapNode>,
     map_size: (usize, usize),
+    fuel_cost: usize,
 }
 
 impl Iterator for PhoenicianTrader {
     type Item = usize;
     fn next(&mut self) -> Option<Self::Item> {
-        let mut visited: HashMap<Pos, usize> = HashMap::new();
-        let mut queue: BinaryHeap<PosWithDistance> =
-            BinaryHeap::with_capacity(self.map_size.0 * self.map_size.1);
+        let mut visited = vec![None; self.map_size.0 * self.map_size.1];
+        let mut queue = VecDeque::new();
 
         let mut ports = Vec::new();
 
-        let current_port_id = match self.world_map.get(&self.current_port) {
-            Some(WorldMapNode::Port(port_id)) => *port_id,
+        let current_port_id = match self.world_map[self.current_port.to_index(self.map_size)] {
+            WorldMapNode::Port(port_id) => port_id,
             _ => unreachable!("Should be a port"),
         };
 
-        queue.push(PosWithDistance(self.current_port, 0));
-        visited.insert(self.current_port, 0);
+        queue.push_front(PosWithDistance(self.current_port, 0));
+        visited[self.current_port.to_index(self.map_size)] = Some(0);
 
-        while let Some(PosWithDistance(node, distance)) = queue.pop() {
-            if let WorldMapNode::Port(port) = self.world_map.get(&node).unwrap() {
-                if *port > current_port_id {
+        let mut left_ports = self.left_ports.clone();
+
+        while let Some(PosWithDistance(node, distance)) = queue.pop_back() {
+            if let WorldMapNode::Port(port) = self.world_map[node.to_index(self.map_size)] {
+                if port > current_port_id {
                     ports.push((node, distance));
+
+                    if self.current_port == self.first_port {
+                        self.left_ports.push(node);
+                    } else {
+                        left_ports.retain(|&port| port != node);
+                    }
                 }
+            }
+
+            if left_ports.is_empty() && self.current_port != self.first_port {
+                break;
             }
 
             for direction in &[
@@ -94,42 +110,42 @@ impl Iterator for PhoenicianTrader {
                     continue;
                 }
 
-                if let Some(WorldMapNode::Land) = self.world_map.get(&next_node) {
+                if let WorldMapNode::Land = self.world_map[next_node.to_index(self.map_size)] {
                     continue;
                 }
 
-                if visited.get(&next_node).is_none() {
-                    queue.push(PosWithDistance(next_node, distance + 1));
-                    visited.insert(next_node, distance + 1);
+                if visited[next_node.to_index(self.map_size)].is_none() {
+                    queue.push_front(PosWithDistance(next_node, distance + 1));
+                    visited[next_node.to_index(self.map_size)] = Some(distance + 1);
                 }
             }
         }
 
         if self.first_port == self.current_port {
-            let distance =
-                match ports
-                    .iter()
-                    .max_by_key(|(port, _)| match self.world_map.get(&port) {
-                        Some(WorldMapNode::Port(current_port)) => current_port,
-                        _ => unreachable!("Should be a port"),
-                    }) {
-                    Some((_, distance)) => *distance,
-                    None => return None,
-                };
+            let distance = match ports.iter().max_by_key(|(port, _)| {
+                match self.world_map[port.to_index(self.map_size)] {
+                    WorldMapNode::Port(current_port) => current_port,
+                    _ => unreachable!("Should be a port"),
+                }
+            }) {
+                Some((_, distance)) => *distance,
+                None => return None,
+            };
 
             self.fuel_cost += distance;
         }
 
-        let (port, distance) =
-            match ports
-                .iter()
-                .min_by_key(|(port, _)| match self.world_map.get(&port) {
-                    Some(WorldMapNode::Port(current_port)) => current_port,
-                    _ => unreachable!("Should be a port"),
-                }) {
-                Some((port, distance)) => (*port, *distance),
-                None => return None,
-            };
+        let (port, distance) = match ports.iter().min_by_key(|(port, _)| {
+            match self.world_map[port.to_index(self.map_size)] {
+                WorldMapNode::Port(current_port) => current_port,
+                _ => unreachable!("Should be a port"),
+            }
+        }) {
+            Some((port, distance)) => (*port, *distance),
+            None => return None,
+        };
+
+        self.left_ports.retain(|p| *p != port);
 
         self.fuel_cost += distance;
         self.current_port = port;
@@ -141,50 +157,48 @@ impl Iterator for PhoenicianTrader {
 impl FromStr for PhoenicianTrader {
     type Err = anyhow::Error;
     fn from_str(s: &str) -> Result<Self> {
-        let mut map_size = (0, 0);
-        let mut world_map: HashMap<Pos, WorldMapNode> = HashMap::new();
+        let mut world_map: Vec<WorldMapNode> = Vec::new();
+        let mut ports = Vec::new();
 
-        for (y, line) in s.lines().skip(1).enumerate() {
+        let mut lines = s.lines();
+
+        let map_size: (usize, usize) = lines
+            .next()
+            .unwrap()
+            .trim()
+            .split_once(' ')
+            .map(|(x, y)| (y.parse().unwrap(), x.parse().unwrap()))
+            .unwrap();
+
+        for (y, line) in lines.enumerate() {
             for (x, ch) in line.trim().chars().enumerate() {
                 let pos = Pos(x as i32, y as i32);
 
-                if x > map_size.0 {
-                    map_size.0 = x;
-                }
-                if y > map_size.1 {
-                    map_size.1 = y;
-                }
-
                 match ch {
                     '.' => {
-                        world_map.insert(pos, WorldMapNode::Water);
+                        world_map.push(WorldMapNode::Water);
                     }
                     '*' => {
-                        world_map.insert(pos, WorldMapNode::Land);
+                        world_map.push(WorldMapNode::Land);
                     }
                     '0'..='9' => {
-                        world_map
-                            .insert(pos, WorldMapNode::Port(ch.to_digit(10).unwrap() as usize));
+                        world_map.push(WorldMapNode::Port(ch.to_digit(10).unwrap() as usize));
+                        ports.push((pos, ch.to_digit(10).unwrap() as usize));
                     }
                     _ => unreachable!("Invalid character"),
                 }
             }
         }
 
-        let current_port = match world_map
-            .iter()
-            .find(|(_, node)| matches!(node, WorldMapNode::Port(1)))
-        {
-            Some((pos, _)) => *pos,
-            None => return Err(anyhow::anyhow!("No starting port")),
-        };
+        let current_port = ports.iter().min_by_key(|(_, port)| *port).unwrap().0;
 
         Ok(Self {
             first_port: current_port,
             current_port,
+            left_ports: Vec::new(),
             world_map,
             fuel_cost: 0,
-            map_size: (map_size.0 + 1, map_size.1 + 1),
+            map_size,
         })
     }
 }
@@ -197,22 +211,23 @@ mod tests {
 
     #[test]
     fn test_go_to_next_port() {
-        const INPUT: &str = r"80 15
-            ............****..............**......................................**....*1..
-            ..........*******.............****............*...........********....****......
-            ..........*******.............****..........****..........********....****......
-            ..........*******.............****.........******..........********....****.....
-            ..........*******.............****.........******..........********....****.....
-            ..........*******.............****.........******..........********....****.....
-            ..........*******.............****........********.......**********....****.....
-            ..........*******.............****.......*********.......**********....****.....
-            ..........*******.............****.......*********.......**********....****.....
-            ..........*******.............****.......*********.......**********....****.....
-            ..............................****.......*********.......**********....****.....
-            ..........*******.............****.......*********.......**********....****.....
-            ..........*******.............****.......*********.......**********....****.....
-            ..........*******.............****.......*********.......**********....****.....
-            .2........*******........................*********.......**********.............";
+        const INPUT: &str = r"
+            80 15
+            .......................****************.........................................
+            ...************..........************...........................................
+            ....***************........*******.......*********..................1******.....
+            ....***************.........**........***************..............*********....
+            .....************.....................***************..............*********....
+            ........*********.....................***************..............*********....
+            ............*****......................**************...............*****.......
+            .........................................************...........................
+            .........................................************...........................
+            **.............................**,.......************...........................
+            *****.........................****.......***********............................
+            ********.......................***.........********.............................
+            ***************2................*,..........****................................
+            *******************.............................................................
+            ********************............................................................";
 
         let mut phoenicians: PhoenicianTrader = INPUT.parse().unwrap();
 
